@@ -1,0 +1,27 @@
+{
+  "name": "myproject",
+  "version": "1.0.0",
+  "description": "",
+  "main": "truffle-config.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@openzeppelin/contracts": "^2.3.0",
+    "surya": "^0.2.11",
+    "truffle-error": "0.0.5",
+    "truffle-hdwallet-provider": "^1.0.0-web3one.5"
+  },
+  "devDependencies": {
+    "eth-gas-reporter": "^0.1.12",
+    "prettier": "^1.18.2",
+    "prettier-plugin-solidity": "^1.0.0-alpha.31",
+    "solhint": "^2.3.0",
+    "solhint-plugin-prettier": "0.0.3"
+  }
+}

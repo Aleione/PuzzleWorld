@@ -1,0 +1,968 @@
+pragma solidity ^0.5.0;
+
+library SafeMath {
+    /**
+     * @dev Multiplies two unsigned integers, reverts on overflow.
+     */
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        // Gas optimization: this is cheaper than requiring 'a' not being zero, but the
+        // benefit is lost if 'b' is also tested.
+        // See: https://github.com/OpenZeppelin/openzeppelin-solidity/pull/522
+        if (a == 0) {
+            return 0;
+        }
+
+        uint256 c = a * b;
+        require(c / a == b);
+
+        return c;
+    }
+
+    /**
+     * @dev Integer division of two unsigned integers truncating the quotient, reverts on division by zero.
+     */
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        // Solidity only automatically asserts when dividing by 0
+        require(b > 0);
+        uint256 c = a / b;
+        // assert(a == b * c + a % b); // There is no case in which this doesn't hold
+
+        return c;
+    }
+
+    /**
+     * @dev Subtracts two unsigned integers, reverts on overflow (i.e. if subtrahend is greater than minuend).
+     */
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b <= a);
+        uint256 c = a - b;
+
+        return c;
+    }
+
+    /**
+     * @dev Adds two unsigned integers, reverts on overflow.
+     */
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a);
+
+        return c;
+    }
+
+    /**
+     * @dev Divides two unsigned integers and returns the remainder (unsigned integer modulo),
+     * reverts when dividing by zero.
+     */
+    function mod(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b != 0);
+        return a % b;
+    }
+}
+
+/**
+ * @title Ownable
+ * @dev The Ownable contract has an owner address, and provides basic authorization control
+ * functions, this simplifies the implementation of "user permissions".
+ */
+contract Ownable {
+    address internal owner;
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+
+    /**
+     * @return the address of the owner.
+     */
+    function getOwner() public view returns (address) {
+        return owner;
+    }
+
+    /**
+     * @dev Throws if called by any account other than the owner.
+     */
+    modifier onlyOwner() {
+        require(isOwner());
+        _;
+    }
+
+    /**
+     * @return true if `msg.sender` is the owner of the contract.
+     */
+    function isOwner() public view returns (bool) {
+        return msg.sender == owner;
+    }
+
+    /**
+     * @dev Allows the current owner to relinquish control of the contract.
+     * It will not be possible to call the functions with the `onlyOwner`
+     * modifier anymore.
+     * @notice Renouncing ownership will leave the contract without an owner,
+     * thereby removing any functionality that is only available to the owner.
+     */
+    function renounceOwnership() public onlyOwner {
+        emit OwnershipTransferred(owner, address(0));
+        owner = address(0);
+    }
+
+    /**
+     * @dev Allows the current owner to transfer control of the contract to a newOwner.
+     * @param newOwner The address to transfer ownership to.
+     */
+    function transferOwnership(address newOwner) public onlyOwner {
+        _transferOwnership(newOwner);
+    }
+
+    /**
+     * @dev Transfers control of the contract to a newOwner.
+     * @param newOwner The address to transfer ownership to.
+     */
+    function _transferOwnership(address newOwner) internal {
+        require(newOwner != address(0));
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+}
+
+interface IArbitrable {
+    /** @dev To be emmited when meta-evidence is submitted.
+     *  @param _metaEvidenceID Unique identifier of meta-evidence.
+     *  @param _evidence A link to the meta-evidence JSON.
+     */
+    event MetaEvidence(uint indexed _metaEvidenceID, string _evidence);
+
+    /** @dev To be emmited when a dispute is created to link the correct meta-evidence to the disputeID
+     *  @param _arbitrator The arbitrator of the contract.
+     *  @param _disputeID ID of the dispute in the Arbitrator contract.
+     *  @param _metaEvidenceID Unique identifier of meta-evidence.
+     *  @param _evidenceGroupID Unique identifier of the evidence group that is linked to this dispute.
+     */
+    event Dispute(Arbitrator indexed _arbitrator, uint indexed _disputeID, uint _metaEvidenceID, uint _evidenceGroupID);
+
+    /** @dev To be raised when evidence are submitted. Should point to the ressource (evidences are not to be stored on chain due to gas considerations).
+     *  @param _arbitrator The arbitrator of the contract.
+     *  @param _evidenceGroupID Unique identifier of the evidence group the evidence belongs to.
+     *  @param _party The address of the party submiting the evidence. Note that 0x0 refers to evidence not submitted by any party.
+     *  @param _evidence A URI to the evidence JSON file whose name should be its keccak256 hash followed by .json.
+     */
+    event Evidence(Arbitrator indexed _arbitrator, uint indexed _evidenceGroupID, address indexed _party, string _evidence);
+
+    /** @dev To be raised when a ruling is given.
+     *  @param _arbitrator The arbitrator giving the ruling.
+     *  @param _disputeID ID of the dispute in the Arbitrator contract.
+     *  @param _ruling The ruling which was given.
+     */
+    event Ruling(Arbitrator indexed _arbitrator, uint indexed _disputeID, uint _ruling);
+
+    /** @dev Give a ruling for a dispute. Must be called by the arbitrator.
+     *  The purpose of this function is to ensure that the address calling it has the right to rule on the contract.
+     *  @param _disputeID ID of the dispute in the Arbitrator contract.
+     *  @param _ruling Ruling given by the arbitrator. Note that 0 is reserved for "Not able/wanting to make a decision".
+     */
+    function rule(uint _disputeID, uint _ruling) external;
+}
+
+contract Arbitrable is IArbitrable {
+    Arbitrator public arbitrator;
+    bytes public arbitratorExtraData; // Extra data to require particular dispute and appeal behaviour.
+
+    modifier onlyArbitrator {require(msg.sender == address(arbitrator), "Can only be called by the arbitrator."); _;}
+
+    /** @dev Constructor. Choose the arbitrator.
+     *  @param _arbitrator The arbitrator of the contract.
+     *  @param _arbitratorExtraData Extra data for the arbitrator.
+     */
+    constructor(Arbitrator _arbitrator, bytes memory _arbitratorExtraData) public {
+        arbitrator = _arbitrator;
+        arbitratorExtraData = _arbitratorExtraData;
+    }
+
+    /** @dev Give a ruling for a dispute. Must be called by the arbitrator.
+     *  The purpose of this function is to ensure that the address calling it has the right to rule on the contract.
+     *  @param _disputeID ID of the dispute in the Arbitrator contract.
+     *  @param _ruling Ruling given by the arbitrator. Note that 0 is reserved for "Not able/wanting to make a decision".
+     */
+    function rule(uint _disputeID, uint _ruling) public onlyArbitrator {
+        emit Ruling(Arbitrator(msg.sender),_disputeID,_ruling);
+
+        executeRuling(_disputeID,_ruling);
+    }
+
+
+    /** @dev Execute a ruling of a dispute.
+     *  @param _disputeID ID of the dispute in the Arbitrator contract.
+     *  @param _ruling Ruling given by the arbitrator. Note that 0 is reserved for "Not able/wanting to make a decision".
+     */
+    function executeRuling(uint _disputeID, uint _ruling) internal;
+}
+
+contract Arbitrator {
+
+    enum DisputeStatus {Waiting, Appealable, Solved}
+
+    modifier requireArbitrationFee(bytes memory _extraData) {
+        require(msg.value >= arbitrationCost(_extraData), "Not enough ETH to cover arbitration costs.");
+        _;
+    }
+    modifier requireAppealFee(uint _disputeID, bytes memory _extraData) {
+        require(msg.value >= appealCost(_disputeID, _extraData), "Not enough ETH to cover appeal costs.");
+        _;
+    }
+
+    /** @dev To be raised when a dispute is created.
+     *  @param _disputeID ID of the dispute.
+     *  @param _arbitrable The contract which created the dispute.
+     */
+    event DisputeCreation(uint indexed _disputeID, Arbitrable indexed _arbitrable);
+
+    /** @dev To be raised when a dispute can be appealed.
+     *  @param _disputeID ID of the dispute.
+     */
+    event AppealPossible(uint indexed _disputeID, Arbitrable indexed _arbitrable);
+
+    /** @dev To be raised when the current ruling is appealed.
+     *  @param _disputeID ID of the dispute.
+     *  @param _arbitrable The contract which created the dispute.
+     */
+    event AppealDecision(uint indexed _disputeID, Arbitrable indexed _arbitrable);
+
+    /** @dev Create a dispute. Must be called by the arbitrable contract.
+     *  Must be paid at least arbitrationCost(_extraData).
+     *  @param _choices Amount of choices the arbitrator can make in this dispute.
+     *  @param _extraData Can be used to give additional info on the dispute to be created.
+     *  @return disputeID ID of the dispute created.
+     */
+    function createDispute(uint _choices, bytes memory _extraData) public requireArbitrationFee(_extraData) payable returns(uint disputeID) {}
+
+    /** @dev Compute the cost of arbitration. It is recommended not to increase it often, as it can be highly time and gas consuming for the arbitrated contracts to cope with fee augmentation.
+     *  @param _extraData Can be used to give additional info on the dispute to be created.
+     *  @return fee Amount to be paid.
+     */
+    function arbitrationCost(bytes memory _extraData) public view returns(uint fee);
+    
+
+    /** @dev Appeal a ruling. Note that it has to be called before the arbitrator contract calls rule.
+     *  @param _disputeID ID of the dispute to be appealed.
+     *  @param _extraData Can be used to give extra info on the appeal.
+     */
+    function appeal(uint _disputeID, bytes memory _extraData) public requireAppealFee(_disputeID,_extraData) payable {
+        emit AppealDecision(_disputeID, Arbitrable(msg.sender));
+    }
+
+    /** @dev Compute the cost of appeal. It is recommended not to increase it often, as it can be higly time and gas consuming for the arbitrated contracts to cope with fee augmentation.
+     *  @param _disputeID ID of the dispute to be appealed.
+     *  @param _extraData Can be used to give additional info on the dispute to be created.
+     *  @return fee Amount to be paid.
+     */
+    function appealCost(uint _disputeID, bytes memory _extraData) public view returns(uint fee);
+
+    /** @dev Compute the start and end of the dispute's current or next appeal period, if possible.
+     *  @param _disputeID ID of the dispute.
+     *  @return The start and end of the period.
+     */
+    function appealPeriod(uint _disputeID) public view returns(uint start, uint end) {}
+
+    /** @dev Return the status of a dispute.
+     *  @param _disputeID ID of the dispute to rule.
+     *  @return status The status of the dispute.
+     */
+    function disputeStatus(uint _disputeID) public view returns(DisputeStatus status);
+
+    /** @dev Return the current ruling of a dispute. This is useful for parties to know if they should appeal.
+     *  @param _disputeID ID of the dispute.
+     *  @return ruling The ruling which has been given or the one which will be given if there is no appeal.
+     */
+    function currentRuling(uint _disputeID) public view returns(uint ruling);
+}
+
+
+contract Puzzles is Ownable, IArbitrable {
+    
+    using SafeMath for uint256;
+    
+    struct Game {
+        uint32 puzzleType;
+        address payable creator;
+        uint256 residualJackpot;
+        uint256 maxOffer;
+        uint256 minOffer;
+        uint256 maxOfferNumber;
+        uint256 timePropose;
+        uint256 timeoutOffer;
+        uint256 timeCreationGame;
+        uint256 timeoutResolution;
+        uint256 timeDispute;
+        uint256 quote;
+        bytes32 solutionHash;
+        string  solution;
+        }
+        
+    string[] public gamesType;
+    
+    Game[] public games;
+    
+    mapping(uint256=>string) public gameProposeMetadata;
+    
+    event GamesSource (uint256 indexed _gameId,  address indexed _creator, uint32 indexed puzzleType, string puzzle_name, string metadata)  ;
+    
+    event GamesValues (uint256 indexed _gameId,  uint256 max_jackpot, uint256 quote, uint256 maxOffer, uint256 minOffer, uint256 max_numer_offer,  uint256 timeCreation, uint256 offer_deadline, uint256 solution_deadline)  ;
+        
+    enum Result {NOTHING, WAITING_CREATOR, WAITING_PLAYER, DISPUTE_CREATED, PLAYER_WIN, PLAYER_LOST, NO_DECISION}
+    
+    enum Appeal {NO_APPEAL, PLAYER_APPEAL, CREATOR_APPEAL}
+        
+    struct Offer {
+        address payable player;
+        uint256 expectedWin;
+        bytes32 solutionHash;
+        string solutionPlayer;
+        uint256 lastInteraction; 
+        Result solutionResult;
+        uint256 disputeId; // If dispute exists, the ID of the dispute.
+        uint256 playerFee; // Total fees paid by the player in case of dispute
+        uint256 creatorFee; // Total fees paid by the creator in case of dispute
+        Appeal appeal;
+        uint256 appealFee;
+        }
+        
+    mapping  (uint256 => Offer[]) public gameOffers;
+    
+    event OffersLog (uint256 indexed _gameId, address indexed _player, uint256 value_bet, uint256 _expectedWin);
+    
+    event ResidualLog (uint256 indexed _gameId, uint256 _residual);
+        
+    struct FlagAndPositionPlayer {
+        uint256 indexOffer;
+        bool submittedOffer;
+        bool submittedHashSol;
+        bool submittedSol;
+        }
+    
+    mapping  (uint256 => mapping (address  => FlagAndPositionPlayer )) public offersMap;
+    
+    
+    struct FlagAndPositionCreator {
+        bool submittedGame;
+        bool submittedSol;
+        }
+    
+    mapping  (uint256  => FlagAndPositionCreator ) public creationMap;
+    
+    
+    struct GameAndPlayer  {
+        uint256 gameIndex;
+        address payable player;
+    }
+    
+    mapping (uint256 => GameAndPlayer) public disputeIDtoArbitrationIndexID;
+    
+    event SolutionPlayerLog(uint256 indexed _gameId, address indexed _player, string _solution);
+    
+    event SolutionCreatorLog (uint256 indexed _gameId, address indexed _creator,  string _solution);
+    
+    event SolutionStatusLog (uint256 indexed _gameId, address indexed _player,  bool WonOrLost, uint256 _amount);
+    
+    uint256 public minimalJackpot;
+    
+    uint256 public maxTimeoutCreation;
+    
+    uint256 public timeoutPlayerSolution;
+    
+    uint256 public timeoutCreatorSolution;
+    
+    uint256 public timeoutDisp;
+    
+    uint256 public timeoutRuling;
+    
+    uint256 public feePercent;
+    
+    uint256 public feeBalance;
+    
+    Arbitrator public  arbitrator;
+    
+    bytes public arbitratorExtraData;
+    
+    uint256 public feeTimeout;
+    
+    uint8 constant AMOUNT_OF_CHOICES = 2;
+    uint8 constant PLAYER_WINS = 1;
+    uint8 constant CREATOR_WINS = 2;
+    
+   
+    event MetaEvidence(uint indexed _metaEvidenceID, string _evidence);
+    
+    event HasToPayFee(uint256 indexed _gameId,  address indexed _payer, address indexed DisputeOtherSide, uint256 _minimalAmount);
+    
+    event Dispute(Arbitrator indexed _arbitrator, uint indexed _disputeID, uint _metaEvidenceID, uint _evidenceGroupID);
+    
+    event Evidence(Arbitrator indexed _arbitrator, uint indexed _evidenceGroupID, address indexed _party, string _evidence);
+    
+    event Ruling(Arbitrator indexed _arbitrator, uint indexed _disputeID, uint _ruling);
+    
+    
+    constructor (Arbitrator _arbitrator, bytes memory _arbitratorExtraData, uint256 _minimalJackpot, uint256 _timeoutPlayerSolution, uint256 _timeoutCreatorSolution, uint256 _timeoutDisp, uint256 _feePercent, uint256 _feeTimeout, address _owner) public     {
+        arbitrator=_arbitrator;
+        arbitratorExtraData=_arbitratorExtraData;
+        minimalJackpot=_minimalJackpot;
+        timeoutPlayerSolution=_timeoutPlayerSolution;
+        timeoutCreatorSolution=_timeoutCreatorSolution;
+        timeoutDisp=_timeoutDisp;
+        feePercent= _feePercent;
+        feeTimeout=_feeTimeout;
+        owner=_owner;
+        emit OwnershipTransferred(address(0), _owner);
+    }
+    
+    function setMinJackpot (uint256 _minimalJackpot) onlyOwner() public {
+        minimalJackpot= _minimalJackpot;
+    }
+    
+    function setGamesType (string memory _gameName) onlyOwner() public {
+        gamesType.push(_gameName);
+    }
+    
+    function setMaxTimeoutCreation (uint256 _maxTimeoutCreation)  onlyOwner() public {
+        maxTimeoutCreation=_maxTimeoutCreation;
+    }
+    
+    function setTimeoutPlayerSolution (uint256 _timeoutPlayerSolution) onlyOwner() public {
+        timeoutPlayerSolution=_timeoutPlayerSolution;
+    }
+    
+    function setCreatorSolDeadline (uint256 _timeoutCreatorSolution) onlyOwner() public {
+        timeoutCreatorSolution=_timeoutCreatorSolution;
+    }
+        
+    function setTimeoutDisp (uint256 _timeoutDisp) onlyOwner() public {
+        timeoutDisp=_timeoutDisp;
+    } 
+    
+    function setTimeoutRuling (uint256 _timeOutRuling) onlyOwner() public  {
+        timeoutRuling= _timeOutRuling;
+    }
+    
+    function setFee (uint256 _feePercent) onlyOwner() public {
+        require (_feePercent<10000, "fee value not correct");
+        feePercent=_feePercent;
+    }
+    
+    function withdrawFee (address payable _destination, uint256 _amount) onlyOwner() public {
+        require (_amount<=feeBalance);
+        _destination.transfer(_amount); 
+        feeBalance=feeBalance-_amount;
+    }
+    
+    function setArbitrator (Arbitrator _arbitrator, bytes memory _arbitratorExtraData) onlyOwner() public {
+        arbitrator=_arbitrator;
+        arbitratorExtraData=_arbitratorExtraData;
+    }
+    
+    function setFeeTimeout(uint256 _feeTimeout) onlyOwner() public {
+        feeTimeout=_feeTimeout;
+    }
+    
+    function proposeGame (string memory _gameName, uint32  _gameType, string memory _gameProposeMetadata, uint256 _gameQuote, uint256 _timeoutOffer, uint256 _timeoutResolution,  bytes32 _gameSolHash, uint256 _maximalOffer, uint256 _minimalOffer, uint256 _maxNumber)  public payable {
+        require (_gameType<gamesType.length, "game type does not exist");
+        require (msg.value >=minimalJackpot && (msg.value/10000000)*(10000000)==msg.value, "value sent not correct");
+        require (_gameQuote > 100 && _gameQuote.mul(100000)<=msg.value+10000000, "quote not correct" );
+        require (_gameQuote.mul(10000-feePercent) > 1000000 && _gameQuote.mul(feePercent) < 1000000, "quote non permitted according to fee" );//condition that net_win - value_bet >0 (fee doesn't overcome value initially bet)
+        require ((_maximalOffer/10000000)*(10000000)==_maximalOffer  && (_maximalOffer.mul(_gameQuote))/100<=msg.value.add(_maximalOffer), "maximal offer not permitted");
+        require ((_minimalOffer/10000000)*(10000000)==_minimalOffer  && _minimalOffer<_maximalOffer, "minimal offer not permitted");
+        Game memory creation = Game (_gameType, msg.sender, msg.value, _maximalOffer, _minimalOffer, _maxNumber, now , _timeoutOffer, 0, _timeoutResolution, 0, _gameQuote, _gameSolHash, '');
+        games.push(creation);
+        gameProposeMetadata[games.length.sub(1)]=_gameProposeMetadata;
+        emit GamesSource (games.length.sub(1), msg.sender, _gameType , _gameName, _gameProposeMetadata);
+        emit GamesValues (games.length.sub(1) , msg.value,  _gameQuote, _maximalOffer, _minimalOffer, _maxNumber, now,  _timeoutOffer , _timeoutResolution);
+        emit ResidualLog (games.length.sub(1), msg.value);
+    }
+    
+   
+   function createOffer (uint256 _gameIndex)  public payable {
+        Game storage game=games[_gameIndex];
+        uint256 expectedwin=(msg.value.mul(game.quote))/100 ;
+	    require (msg.sender!=game.creator, "sender must be game creator");
+        require (!offersMap[_gameIndex][msg.sender].submittedOffer==true, "Offer already submitted");
+        require (msg.value<=game.maxOffer && msg.value>=game.minOffer && (msg.value/10000000)*10000000==msg.value,"Value sent not permitted");
+        require (expectedwin <= game.residualJackpot+msg.value, "Not enough residual jackpot for this offer");
+        require (now > game.timePropose && now <= game.timePropose.add(game.timeoutOffer),"Timeout for offer already activated");
+        require (gameOffers[_gameIndex].length<game.maxOfferNumber, "Max number of offers already reached");
+        Offer memory offercreation = Offer (msg.sender,expectedwin,'0x','',now, Result.NOTHING,0,0,0,Appeal.NO_APPEAL,0);
+        gameOffers[_gameIndex].push(offercreation);
+        offersMap[_gameIndex][msg.sender]=FlagAndPositionPlayer(gameOffers[_gameIndex].length-1,true,false,false);
+        game.residualJackpot=game.residualJackpot-(expectedwin-msg.value);
+        emit OffersLog (_gameIndex, msg.sender, msg.value, expectedwin);
+        emit ResidualLog (_gameIndex, game.residualJackpot);
+    }
+    
+    
+    function withdrawResidual (uint256 _gameIndex) public {
+        Game storage game=games[_gameIndex];
+	    require (game.creator==msg.sender, "sender must be game creator");
+        require (now > game.timePropose.add(game.timeoutOffer), "Offer period open yet");
+        msg.sender.transfer(game.residualJackpot);
+        game.residualJackpot=0;
+        emit ResidualLog (_gameIndex, game.residualJackpot);
+    }
+    
+   
+    function createGame (uint256 _gameIndex, string memory _gameCreationMetadata) public {
+        Game storage game=games[_gameIndex];
+        require(game.creator==msg.sender,"sender must be game creator");
+        require(now > game.timePropose.add(game.timeoutOffer) && now <= game.timePropose.add(game.timeoutOffer).add(maxTimeoutCreation), "Timeout for game creation already activated");
+        game.timeCreationGame=now;
+        creationMap[_gameIndex]=FlagAndPositionCreator(true,false);
+        emit MetaEvidence(_gameIndex, _gameCreationMetadata);
+    }
+    
+    
+   function withdrawNonSubmittedGame (uint256 _gameIndex) public {
+        Game storage game=games[_gameIndex];
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][msg.sender];
+        require (offermap.submittedOffer==true, "offer not submitted" );
+        Offer storage offer = gameOffers[_gameIndex][offermap.indexOffer];
+        require (!creationMap[_gameIndex].submittedGame ==true, "game has been created");
+        require (now > game.timePropose.add(game.timeoutOffer).add(maxTimeoutCreation) , "game creation yet possible");
+        uint256 grosswin=offer.expectedWin;
+        uint256 netwin= grosswin-(grosswin.mul(feePercent)/10000);
+        uint256 fee=grosswin-netwin;
+        uint256 valuebet=(grosswin.mul(100))/game.quote;
+        feeBalance=feeBalance.add(fee);
+        msg.sender.transfer(netwin);
+        emit SolutionStatusLog (_gameIndex, msg.sender, true, netwin.sub(valuebet));
+        emit SolutionStatusLog (_gameIndex, game.creator, false , grosswin-valuebet);
+        offer.solutionResult=Result.PLAYER_WIN;
+    }
+    
+ 
+    function submitSolutionHash (uint256 _gameIndex, bytes32 _solHash ) public {
+        Game storage game=games[_gameIndex];
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][msg.sender];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (offermap.submittedOffer==true, "offer not submitted" );
+        require (!offermap.submittedHashSol==true, "solution hash already submitted");
+        Offer storage offer = gameOffers[_gameIndex][offermap.indexOffer];
+        require (now > game.timeCreationGame && now <= game.timeCreationGame.add(game.timeoutResolution), "timeout for hash solution sumbission already activated");
+        offer.solutionHash=_solHash;
+        offermap.submittedHashSol=true;
+    }
+    
+    
+    function submitSolutionPlayer (string memory _solutionGame, bytes32 _secret, uint256 _gameIndex)  public {
+        Game storage game=games[_gameIndex];
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][msg.sender];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (offermap.submittedOffer==true, "offer not submitted");
+        require (offermap.submittedHashSol==true, "solution hash not submitted");
+        require (!offermap.submittedSol==true, "solution already submitted");
+        Offer storage offer = gameOffers[_gameIndex][offermap.indexOffer];
+        require (now >game.timeCreationGame.add(game.timeoutResolution) && now <= game.timeCreationGame.add(game.timeoutResolution).add(timeoutPlayerSolution), "timeout for  solution sumbission already activated");
+        require (keccak256(abi.encodePacked(_secret,_solutionGame))==offer.solutionHash, "solution not compatible with hash");
+        offer.solutionPlayer=_solutionGame;
+        offermap.submittedSol=true;
+        emit SolutionPlayerLog(_gameIndex, msg.sender, _solutionGame);
+   }
+   
+   
+    function submitSolutionCreator (string memory _solutionGame, bytes32 _secret, uint256 _gameIndex)  public {
+        Game storage game=games[_gameIndex];
+        require (game.creator==msg.sender,"sender must be game creator");
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (!creationMap[_gameIndex].submittedSol==true, "solution already submitted");
+        require (now > game.timeCreationGame.add(game.timeoutResolution).add(timeoutPlayerSolution) && now<=game.timeCreationGame.add(game.timeoutResolution).add(timeoutPlayerSolution).add(timeoutCreatorSolution), "timeout for  solution  already activated");
+        require (keccak256(abi.encodePacked(_secret,_solutionGame))==game.solutionHash, "solution not compatible with hash");
+        game.solution=_solutionGame;
+        creationMap[_gameIndex].submittedSol=true;
+        emit SolutionCreatorLog (_gameIndex, msg.sender, _solutionGame);
+   }
+   
+   
+    function playerWithdraw (uint256 _gameIndex)  public {
+        Game storage game=games[_gameIndex];
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][msg.sender];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (offermap.submittedOffer==true, "offer not submitted");
+        require (offermap.submittedHashSol==true, "solution hash not submitted");
+        require (offermap.submittedSol==true, "solution not submitted");
+        Offer storage offer = gameOffers[_gameIndex][offermap.indexOffer];
+        require (offer.solutionResult==Result.NOTHING, "Solution result not in default state");
+        require (now>game.timeCreationGame.add(game.timeoutResolution).add(timeoutPlayerSolution).add(timeoutCreatorSolution), "withdraw win not already activated");
+        require (bytes(game.solution).length==0 || keccak256(abi.encodePacked(game.solution)) ==  keccak256(abi.encodePacked(offer.solutionPlayer)), "solution wrong" );
+        uint256 grosswin=offer.expectedWin;
+        uint256 netwin= grosswin-(grosswin.mul(feePercent)/10000);
+        uint256 fee=grosswin-netwin;
+        uint256 valuebet=(grosswin.mul(100))/game.quote;
+        feeBalance=feeBalance.add(fee);
+        msg.sender.transfer(netwin);
+        emit SolutionStatusLog (_gameIndex, msg.sender, true , netwin.sub(valuebet));
+        emit SolutionStatusLog (_gameIndex, game.creator, false , grosswin-valuebet);
+        offer.solutionResult=Result.PLAYER_WIN;
+   }
+   
+   
+    function creatorWithdraw (uint256 _gameIndex) public {
+        Game storage game=games[_gameIndex];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (creationMap[_gameIndex].submittedSol ==true, "solution not submitted");
+        require (game.creator==msg.sender,"sender must be game creator");
+        require (now>game.timeCreationGame.add(game.timeoutResolution).add(timeoutPlayerSolution).add(timeoutCreatorSolution).add(timeoutDisp),"timeout for withdraw win already activated");
+        for (uint256 j=0; j<gameOffers[_gameIndex].length; j++)  {
+            Offer storage offer = gameOffers[_gameIndex][j];
+            if (offer.solutionResult==Result.NOTHING && keccak256(abi.encodePacked(game.solution)) !=  keccak256(abi.encodePacked(offer.solutionPlayer)))  {
+                uint256 grosswin = offer.expectedWin;
+                uint256 netwin = grosswin-(grosswin.mul(feePercent)/10000);
+                uint256 fee=grosswin-netwin;
+                uint256 valuebet=(grosswin.mul(100))/game.quote;
+                feeBalance=feeBalance.add(fee);
+                msg.sender.transfer(netwin);
+                emit SolutionStatusLog (_gameIndex, offer.player , false , valuebet);  
+                emit SolutionStatusLog (_gameIndex, game.creator , true , valuebet.sub(fee)); 
+                offer.solutionResult=Result.PLAYER_LOST;
+            }  
+        }
+         
+    }
+    
+    function creatorWithdrawSingle (uint256 _gameIndex, address _player) public {
+        Game storage game=games[_gameIndex];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (creationMap[_gameIndex].submittedSol ==true, "solution not submitted");
+        require (game.creator==msg.sender,"sender must be game creator");
+        require (now>game.timeCreationGame.add(game.timeoutResolution).add(timeoutPlayerSolution).add(timeoutCreatorSolution).add(timeoutDisp),"timeout for withdraw win already activated");
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][_player];
+        Offer storage offer=gameOffers[_gameIndex][offermap.indexOffer];
+        if (offer.solutionResult==Result.NOTHING && keccak256(abi.encodePacked(game.solution)) !=  keccak256(abi.encodePacked(offer.solutionPlayer)))  {
+            uint256 grosswin = offer.expectedWin;
+            uint256 netwin = grosswin-(grosswin.mul(feePercent)/10000);
+            uint256 fee=grosswin-netwin;
+            uint256 valuebet=(grosswin.mul(100))/game.quote;
+            feeBalance=feeBalance.add(fee);
+            msg.sender.transfer(netwin);
+            emit SolutionStatusLog (_gameIndex, offer.player , false , valuebet);  
+            emit SolutionStatusLog (_gameIndex, game.creator , true , valuebet.sub(fee)); 
+            offer.solutionResult=Result.PLAYER_LOST;
+        }
+             
+         
+    }
+    
+    function timeOutByplayer(uint256 _gameIndex) public {
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][msg.sender];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (offermap.submittedOffer==true, "offer not submitted");
+        require (offermap.submittedHashSol==true, "solution hash not submitted");
+        require (offermap.submittedSol==true, "solution not submitted");
+        Offer storage offer = gameOffers[_gameIndex][offermap.indexOffer];
+        require(offer.solutionResult == Result.WAITING_CREATOR, "The transaction is not waiting on the creator.");
+        require(now-offer.lastInteraction >= feeTimeout, "Timeout time has not passed yet.");
+        executeRuling(_gameIndex, msg.sender, PLAYER_WINS);
+    }
+
+    //* @dev Pay receiver if sender fails to pay the fee.
+     
+     
+    function timeOutByCreator(uint256 _gameIndex, address payable _player) public {
+        Game storage game=games[_gameIndex];
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][_player];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (creationMap[_gameIndex].submittedSol ==true, "solution not submitted");
+        require (game.creator==msg.sender,"sender must be game creator");
+        Offer storage offer = gameOffers[_gameIndex][offermap.indexOffer];
+        require(offer.solutionResult == Result.WAITING_PLAYER, "The transaction is not waiting on the player.");
+        require(now-offer.lastInteraction >= feeTimeout, "Timeout time has not passed yet.");
+        executeRuling(_gameIndex, _player, CREATOR_WINS);
+    }
+    
+    function getArbitrationCost () public view returns(uint256 arbitrationCost) {
+        arbitrationCost = arbitrator.arbitrationCost(arbitratorExtraData);
+    }
+    
+    function payArbitrationFeeByplayer(uint256 _gameIndex) public payable {
+        Game storage game=games[_gameIndex];
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][msg.sender];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (offermap.submittedOffer==true, "offer not submitted");
+        require (offermap.submittedHashSol==true, "solution hash not submitted");
+        require (offermap.submittedSol==true, "solution not submitted");
+        Offer storage offer = gameOffers[_gameIndex][offermap.indexOffer];
+        require (offer.solutionResult<Result.DISPUTE_CREATED && offer.solutionResult>=Result.NOTHING ,"Dispute has already been created or because the transaction has been executed or player didn't call arbitration.");
+        if (offer.solutionResult==Result.NOTHING )  {  
+            require (now>game.timeCreationGame.add(game.timeoutResolution).add(timeoutPlayerSolution).add(timeoutCreatorSolution) && now<=game.timeCreationGame.add(game.timeoutResolution).add(timeoutPlayerSolution).add(timeoutCreatorSolution).add(timeoutDisp), "timeout for arbitration start already activated");
+            require (keccak256(abi.encodePacked(game.solution)) != keccak256(abi.encodePacked(offer.solutionPlayer)), "solution is correct" );
+        }
+        uint256 arbitrationCost = arbitrator.arbitrationCost(arbitratorExtraData);
+        offer.playerFee = offer.playerFee+msg.value;
+        // Require that the total pay at least the arbitration cost.
+        require(offer.playerFee >= arbitrationCost, "The player fee must cover arbitration costs.");
+        offer.lastInteraction = now;
+        // The receiver still has to pay. This can also happen if he has paid, but arbitrationCost has increased. 
+        if (offer.creatorFee < arbitrationCost) {
+            offer.solutionResult = Result.WAITING_CREATOR;
+            emit HasToPayFee(_gameIndex, game.creator, msg.sender, arbitrationCost-offer.creatorFee);
+        } 
+        else { // The receiver has also paid the fee. We create the dispute.
+            raiseDispute(_gameIndex, msg.sender, arbitrationCost);
+        }
+    }
+    
+    function payArbitrationFeeByCreator(uint256 _gameIndex, address payable player) public payable {
+        Game storage game=games[_gameIndex];
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][player];
+        require(game.creator==msg.sender,"sender must be game creator");
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (creationMap[_gameIndex].submittedSol ==true, "solution not submitted");
+        Offer storage offer = gameOffers[_gameIndex][offermap.indexOffer];
+        require (offer.solutionResult<Result.DISPUTE_CREATED && offer.solutionResult>Result.NOTHING ,"Dispute has already been created or because the transaction has been executed or player didn't call arbitration.");
+        uint256 arbitrationCost = arbitrator.arbitrationCost(arbitratorExtraData);
+        offer.creatorFee = offer.creatorFee+msg.value;
+        // Require that the total pay at least the arbitration cost.
+        require(offer.creatorFee >= arbitrationCost, "The player fee must cover arbitration costs.");
+        offer.lastInteraction = now;
+        // The receiver still has to pay. This can also happen if he has paid, but arbitrationCost has increased. 
+        if (offer.playerFee < arbitrationCost) {
+            offer.solutionResult = Result.WAITING_PLAYER;
+            emit HasToPayFee(_gameIndex, player, msg.sender, arbitrationCost-offer.playerFee);
+        } 
+        else { // The receiver has also paid the fee. We create the dispute.
+            raiseDispute(_gameIndex, player, arbitrationCost);
+        }
+    }
+    
+    function raiseDispute (uint256 _gameIndex, address payable _player, uint256 _arbitrationCost)  internal {
+        Game storage game=games[_gameIndex];
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][_player];
+        Offer storage offer = gameOffers[_gameIndex][offermap.indexOffer];
+        offer.solutionResult = Result.DISPUTE_CREATED;
+        offer.disputeId = arbitrator.createDispute.value(_arbitrationCost)(AMOUNT_OF_CHOICES, arbitratorExtraData);
+        disputeIDtoArbitrationIndexID[offer.disputeId] = GameAndPlayer(_gameIndex, _player);
+        game.timeDispute=now;
+        emit Dispute(arbitrator, offer.disputeId, _gameIndex, uint256(keccak256(abi.encodePacked(_gameIndex,game.creator,_player))));
+        // Refund sender if it overpaid.
+        if (offer.playerFee > _arbitrationCost) {
+            uint256 extraFeeplayer = offer.playerFee-_arbitrationCost;
+            offer.playerFee = _arbitrationCost;
+            _player.transfer(extraFeeplayer);
+        }
+        // Refund receiver if it overpaid.
+        if (offer.creatorFee > _arbitrationCost) {
+            uint256 extraFeeCreator = offer.creatorFee - _arbitrationCost;
+            offer.creatorFee = _arbitrationCost;
+            game.creator.transfer(extraFeeCreator);
+        }
+    }
+    
+    
+   function submitEvidencePlayer(uint256 _gameIndex, string memory _evidence) public {
+        Game storage game=games[_gameIndex];
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][msg.sender];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (offermap.submittedOffer==true, "offer not submitted");
+        require (offermap.submittedHashSol==true, "solution hash not submitted");
+        require (offermap.submittedSol==true, "solution not submitted");
+        Offer storage offer = gameOffers[_gameIndex][offermap.indexOffer];
+        require(offer.solutionResult <= Result.DISPUTE_CREATED, "Must not send evidence if the dispute is resolved.");
+        emit Evidence(arbitrator, uint256(keccak256(abi.encodePacked(_gameIndex,game.creator,msg.sender))), msg.sender, _evidence);
+    }
+    
+    
+    function submitEvidenceCreator(uint256 _gameIndex, address _player, string memory _evidence) public {
+        Game storage game=games[_gameIndex];
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][_player];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (creationMap[_gameIndex].submittedSol ==true, "solution not submitted");
+        require(msg.sender==game.creator,"sender must be game creator");
+        Offer storage offer = gameOffers[_gameIndex][offermap.indexOffer];
+        require(offer.solutionResult <= Result.DISPUTE_CREATED, "Must not send evidence if the dispute is resolved.");
+        emit Evidence(arbitrator,  uint256(keccak256(abi.encodePacked(_gameIndex,msg.sender,_player))), msg.sender, _evidence);
+    }
+    
+    
+    function appealPlayer(uint256 _gameIndex) public payable {
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][msg.sender];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (offermap.submittedOffer==true, "offer not submitted");
+        require (offermap.submittedHashSol==true, "solution hash not submitted");
+        require (offermap.submittedSol==true, "solution not submitted");
+        Offer storage offer=gameOffers[_gameIndex][offermap.indexOffer];
+        uint256 grosswin = offer.expectedWin;
+        uint256 netwin = grosswin-(grosswin.mul(feePercent)/10000);
+        uint256 disputestatus;
+        uint256 currentruling;
+        uint256 startimeAppeal;
+        uint256 endtimeAppeal;
+        uint256 appealcost;
+        (disputestatus, currentruling, startimeAppeal, endtimeAppeal, appealcost)=GetAppealInfo(_gameIndex, msg.sender);
+        require (offer.solutionResult == Result.DISPUTE_CREATED);
+        require (offer.appeal == Appeal.NO_APPEAL);
+        require (disputestatus==1);
+        require (now>=startimeAppeal && now<=endtimeAppeal );
+        require (msg.value>=appealcost);
+        require (currentruling!=1);
+        require (appealcost < netwin+offer.playerFee);
+        if (msg.value>appealcost) {
+            msg.sender.transfer(msg.value-appealcost);
+        }
+        offer.appeal=Appeal.PLAYER_APPEAL;
+        offer.appealFee=appealcost;
+        arbitrator.appeal.value(appealcost)(offer.disputeId, arbitratorExtraData);
+    }
+    
+   function appealCreator(uint256 _gameIndex, address _player) public payable {
+        Game storage game=games[_gameIndex];
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][_player];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (creationMap[_gameIndex].submittedSol ==true, "solution not submitted");
+        require (game.creator==msg.sender,"sender must be game creator");
+        Offer storage offer=gameOffers[_gameIndex][offermap.indexOffer];
+        uint256 grosswin = offer.expectedWin;
+        uint256 netwin = grosswin-(grosswin.mul(feePercent)/10000);
+        uint256 disputestatus;
+        uint256 currentruling;
+        uint256 startimeAppeal;
+        uint256 endtimeAppeal;
+        uint256 appealcost;
+        (disputestatus, currentruling, startimeAppeal, endtimeAppeal, appealcost)=GetAppealInfo(_gameIndex, _player);
+        require (offer.solutionResult == Result.DISPUTE_CREATED);
+        require (offer.appeal == Appeal.NO_APPEAL);
+        require (disputestatus==1);
+        require (now>=startimeAppeal && now<=endtimeAppeal );
+        require (msg.value>=appealcost);
+        require (currentruling!=2);
+        require (appealcost < netwin+offer.playerFee);
+        if (msg.value>appealcost) {
+            msg.sender.transfer(msg.value-appealcost);
+        }
+        offer.appeal=Appeal.CREATOR_APPEAL;
+        offer.appealFee=appealcost;
+        arbitrator.appeal.value(appealcost)(offer.disputeId, arbitratorExtraData);
+    }
+    
+    
+   function GetAppealInfo(uint256 _gameIndex, address _player) public view returns (uint256 _disputestatus, uint256 _currentruling, uint256 _startimeAppeal, uint256 _endtimeAppeal, uint256 _appealcost) {
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][_player];
+        Offer storage offer=gameOffers[_gameIndex][offermap.indexOffer];
+        uint256 disputeid=offer.disputeId;
+        _disputestatus=uint256(arbitrator.disputeStatus(disputeid));
+        _currentruling=arbitrator.currentRuling(disputeid);
+        (_startimeAppeal,_endtimeAppeal)=arbitrator.appealPeriod(disputeid);
+        _appealcost=arbitrator.appealCost(disputeid,arbitratorExtraData);
+    }
+    
+   
+   function rule(uint256 _disputeID, uint _ruling) external {
+        GameAndPlayer storage arbitration= disputeIDtoArbitrationIndexID[_disputeID];
+        uint256 gameindex=arbitration.gameIndex;
+        address payable player=arbitration.player;
+        FlagAndPositionPlayer storage offermap=offersMap[gameindex][player];
+        Offer storage offer=gameOffers[gameindex][offermap.indexOffer];
+        require(msg.sender == address(arbitrator), "The caller must be the arbitrator.");
+        require(offer.solutionResult == Result.DISPUTE_CREATED, "The dispute has already been resolved.");
+        emit Ruling(Arbitrator(msg.sender), _disputeID, _ruling);
+        executeRuling(gameindex, player, _ruling);
+    }
+    
+    
+    function executeRuling(uint256 _gameIndex , address payable _player, uint256 _ruling) internal {
+        Game storage game=games[_gameIndex];
+        Offer storage offer=gameOffers[_gameIndex][offersMap[_gameIndex][_player].indexOffer];
+        require(_ruling <= AMOUNT_OF_CHOICES, "Invalid ruling.");
+        // Give the arbitration fee back.
+        // Note that we use send to prevent a party from blocking the execution.
+        uint256 grosswin = offer.expectedWin;
+        uint256 netwin = grosswin-(grosswin.mul(feePercent)/10000);
+        uint256 fee=grosswin-netwin;
+        uint256 valuebet=(grosswin.mul(100))/game.quote;
+        feeBalance=feeBalance.add(fee);
+        uint256 appealfeeplayer=0;
+        uint256 appealfeecreator=0;
+        if (offer.appeal==Appeal.PLAYER_APPEAL) {
+            appealfeeplayer=offer.appealFee;
+        }
+        if (offer.appeal==Appeal.CREATOR_APPEAL) {
+            appealfeecreator=offer.appealFee;
+        }
+        if (_ruling == PLAYER_WINS) {
+            _player.transfer(netwin+offer.playerFee);
+            if (offer.solutionResult == Result.WAITING_CREATOR) {
+                game.creator.transfer(offer.creatorFee);
+                emit SolutionStatusLog (_gameIndex, game.creator, false , grosswin-valuebet);
+            }
+            else {
+                emit SolutionStatusLog (_gameIndex, game.creator, false , grosswin-valuebet+offer.creatorFee+appealfeecreator);
+            }
+            if (netwin.sub(valuebet) > appealfeeplayer)  {  
+                emit SolutionStatusLog (_gameIndex, _player, true , netwin-valuebet-appealfeeplayer);
+            }
+            else {
+                emit SolutionStatusLog (_gameIndex, _player, false , appealfeeplayer-netwin+valuebet);
+            }
+            offer.solutionResult=Result.PLAYER_WIN;
+        } 
+        else if (_ruling == CREATOR_WINS) {
+            game.creator.transfer(netwin+offer.creatorFee);
+            if (offer.solutionResult == Result.WAITING_PLAYER) {
+                _player.transfer(offer.playerFee);
+                emit SolutionStatusLog (_gameIndex, _player , false , valuebet); 
+            }
+            else {
+                emit SolutionStatusLog (_gameIndex, _player , false , valuebet+offer.playerFee+appealfeeplayer);
+            }
+            if (valuebet.sub(fee) > appealfeecreator)  {
+                emit SolutionStatusLog (_gameIndex, game.creator , true , valuebet-fee-appealfeecreator);
+            }
+            else {
+                emit SolutionStatusLog (_gameIndex, game.creator , false , appealfeecreator-valuebet+fee);
+            }
+            offer.solutionResult=Result.PLAYER_LOST;
+        }
+        else {
+            uint256 playeramount = valuebet+(offer.playerFee/2).sub(fee/2);
+            uint256 creatoramount = grosswin-valuebet+(offer.creatorFee/2).sub(fee/2);
+            _player.transfer(playeramount);
+            game.creator.transfer(creatoramount);
+            emit SolutionStatusLog (_gameIndex, game.creator , false , (offer.creatorFee/2)+(fee/2)+appealfeecreator);
+            emit SolutionStatusLog (_gameIndex, _player , false ,  (offer.playerFee/2)+(fee/2)+appealfeeplayer);
+            offer.solutionResult=Result.NO_DECISION;
+        }
+        offer.playerFee = 0;
+        offer.creatorFee = 0;
+    }
+    
+    
+    function WithdrawPlayerNoRuling(uint256 _gameIndex) public  {
+        Game storage game=games[_gameIndex];
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][msg.sender];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (offermap.submittedOffer==true, "offer not submitted");
+        require (offermap.submittedHashSol==true, "solution hash not submitted");
+        require (offermap.submittedSol==true, "solution not submitted");
+        Offer storage offer=gameOffers[_gameIndex][offermap.indexOffer];
+        require(offer.solutionResult == Result.DISPUTE_CREATED, "The dispute has already been resolved.");
+        require(now > game.timeDispute.add(timeoutRuling), "Ruling yet activated");
+        executeRuling(_gameIndex, msg.sender, 0);
+    }
+    
+    function WithdrawCreatorNoRuling(uint256 _gameIndex) public  {
+        Game storage game=games[_gameIndex];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (creationMap[_gameIndex].submittedSol ==true, "solution not submitted");
+        require (game.creator==msg.sender,"sender must be game creator");
+        for (uint256 j=0; j<gameOffers[_gameIndex].length; j++) {
+            Offer storage offer = gameOffers[_gameIndex][j];
+            require(offer.solutionResult == Result.DISPUTE_CREATED, "The dispute has already been resolved.");
+            require(now > game.timeDispute.add(timeoutRuling), "Ruling yet activated");
+            executeRuling(_gameIndex, offer.player, 0);
+        } 
+    }
+    
+    function WithdrawCreatorNoRulingSingle (uint256 _gameIndex, address _player) public {
+        Game storage game=games[_gameIndex];
+        require (creationMap[_gameIndex].submittedGame ==true, "game not created");
+        require (creationMap[_gameIndex].submittedSol ==true, "solution not submitted");
+        require (game.creator==msg.sender,"sender must be game creator");
+        FlagAndPositionPlayer storage offermap=offersMap[_gameIndex][_player];
+        Offer storage offer=gameOffers[_gameIndex][offermap.indexOffer];
+        require(offer.solutionResult == Result.DISPUTE_CREATED, "The dispute has already been resolved.");
+        require(now > game.timeDispute.add(timeoutRuling), "Ruling yet activated");
+        executeRuling(_gameIndex, offer.player, 0);
+    }
+}
