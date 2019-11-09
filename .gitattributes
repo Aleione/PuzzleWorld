@@ -1,2 +1,2 @@
-*.sol linguist-language=solidity
-*.js linguist-language=javascript
+*.sol linguist-language=solidity;
+*.js linguist-language=javascript;
