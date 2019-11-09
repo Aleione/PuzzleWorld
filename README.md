@@ -1,7 +1,6 @@
 # PuzzleWorld
 Logical gaming dapp with dispute resolution
 
-TRUFFLE FRAMEWORK SETTINGS:
 
 TRUFFLE INSTALLATION:
 
