@@ -12,7 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@openzeppelin/contracts": "^2.3.0",
+    "@openzeppelin/contracts": "^4.4.2",
     "surya": "^0.2.11",
     "truffle-error": "0.0.5",
     "truffle-hdwallet-provider": "^1.0.0-web3one.5"
